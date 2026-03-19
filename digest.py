@@ -140,7 +140,7 @@ def search_news() -> str:
 
 # --- 2. Claude APIでダイジェスト生成 ---
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_PUBLIC = """\
 あなたはAI業界専門のニュースキュレーターです。
 提供された検索結果を元に、日本語でAIデイリーダイジェストを作成してください。
 
@@ -169,42 +169,25 @@ SYSTEM_PROMPT = """\
 （ビジネス活用・収益化の最新トレンド2-3件）
 
 ---
-
-## あなたのビジネスへの活用ポイント
-
-### eBay輸出
-（今日のニュースからeBay輸出に活かせるポイント）
-
-### ZINQ（マッチングAIコーチ）
-（マッチングアプリAIコーチ事業に活かせるポイント）
-
-### Sion（占いサロン）
-（AI占い事業に活かせるポイント）
-
-### 全般
-（事業全体に関わるポイント）
-
----
 Sources:
 （使用した情報源のURLリスト）
 
 ## ルール
 - 検索結果に含まれない情報は書かない
 - 各ニュースは日付を明記
-- 「活用ポイント」は具体的なアクション提案にする
 - NotebookLMに貼って音声化することを想定し、見出しと要約を明確にする
 - 新しいニュースがない場合は正直に「本日の新着情報はありませんでした」と記載
 """
 
 
 def generate_digest(raw_news: str) -> str:
-    """Claude APIでダイジェストを生成."""
+    """Claude APIで公開用ダイジェストを生成（活用ポイントなし）."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4096,
-        system=SYSTEM_PROMPT.replace("{date}", TODAY),
+        system=SYSTEM_PROMPT_PUBLIC.replace("{date}", TODAY),
         messages=[
             {
                 "role": "user",
@@ -219,23 +202,29 @@ def generate_digest(raw_news: str) -> str:
 # --- 3. Telegram送信 ---
 
 def make_telegram_summary(digest: str) -> str:
-    """Markdown全文からTelegram向け短縮版を作成."""
+    """ニュース要約 + 自分のビジネスへの活用ポイントをTelegram用に生成."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        model="claude-sonnet-4-20250514",
+        max_tokens=3000,
         messages=[
             {
                 "role": "user",
                 "content": (
-                    "以下のAIダイジェストを、Telegramメッセージ用に要約してください。\n"
-                    "ルール:\n"
+                    "以下のAIダイジェストを元に、Telegramメッセージを作成してください。\n\n"
+                    "## 構成\n"
+                    "1. ニュース要約（各セクション要点1-2行）\n"
+                    "2. 🎯 ビジネス活用ポイント（以下の事業ごとに具体的アクション提案）:\n"
+                    "   - eBay輸出（日本→海外の越境EC）\n"
+                    "   - ZINQ（マッチングアプリAIコーチ、LINE Bot、月額¥4,980）\n"
+                    "   - Sion（AI占いサロン、霊視鑑定ビジネス）\n"
+                    "   - 全般（個人事業全体の戦略）\n\n"
+                    "## ルール\n"
                     "- 最大3500文字以内\n"
                     "- 絵文字を使って読みやすく\n"
-                    "- 各セクションの要点1-2行ずつ\n"
-                    "- 「活用ポイント」は必ず含める\n"
-                    "- 最後に「詳細版はGitHubリポジトリのdigestsフォルダをチェック」と追記\n\n"
+                    "- 活用ポイントは具体的に（「〜を検討」ではなく「〜をやってみる」レベル）\n"
+                    "- 最後に「📄 NotebookLM用の詳細版はGitHubリポジトリのdigestsフォルダへ」と追記\n\n"
                     f"{digest}"
                 ),
             }

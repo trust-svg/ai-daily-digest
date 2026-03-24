@@ -1,7 +1,8 @@
-"""AI Daily Digest — 毎朝AIニュースを収集・要約・Telegram送信."""
+"""AI Daily Digest — 毎朝AIニュースを収集・要約・Discord送信."""
 
 import os
 import re
+import json
 import asyncio
 import urllib.request
 import urllib.parse
@@ -11,7 +12,6 @@ from pathlib import Path
 from html import unescape
 
 import anthropic
-from telegram import Bot
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +20,7 @@ JST = timezone(timedelta(hours=9))
 TODAY = datetime.now(JST).strftime("%Y-%m-%d")
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 OUTPUT_DIR = Path(__file__).parent / "digests"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -199,10 +198,10 @@ def generate_digest(raw_news: str) -> str:
     return message.content[0].text
 
 
-# --- 3. Telegram送信 ---
+# --- 3. Discord送信 ---
 
-def make_telegram_summary(digest: str) -> str:
-    """ニュース要約 + 自分のビジネスへの活用ポイントをTelegram用に生成."""
+def make_discord_summary(digest: str) -> str:
+    """ニュース要約 + 自分のビジネスへの活用ポイントをDiscord用に生成."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
@@ -212,7 +211,7 @@ def make_telegram_summary(digest: str) -> str:
             {
                 "role": "user",
                 "content": (
-                    "以下のAIダイジェストを元に、Telegramメッセージを作成してください。\n\n"
+                    "以下のAIダイジェストを元に、Discordメッセージを作成してください。\n\n"
                     "## 構成\n"
                     "1. ニュース要約（各セクション要点1-2行）\n"
                     "2. 🎯 ビジネス活用ポイント（以下の事業ごとに具体的アクション提案）:\n"
@@ -224,7 +223,8 @@ def make_telegram_summary(digest: str) -> str:
                     "- 最大3500文字以内\n"
                     "- 絵文字を使って読みやすく\n"
                     "- 活用ポイントは具体的に（「〜を検討」ではなく「〜をやってみる」レベル）\n"
-                    "- 最後に「📄 NotebookLM用の詳細版はGitHubリポジトリのdigestsフォルダへ」と追記\n\n"
+                    "- 最後に「📄 NotebookLM用の詳細版はGitHubリポジトリのdigestsフォルダへ」と追記\n"
+                    "- Discord Markdownで書式を整えること\n\n"
                     f"{digest}"
                 ),
             }
@@ -234,12 +234,18 @@ def make_telegram_summary(digest: str) -> str:
     return message.content[0].text
 
 
-async def send_telegram(text: str) -> None:
-    """Telegramにメッセージ送信（4000文字ずつ分割）."""
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+def send_discord(text: str) -> None:
+    """Discord Webhookにメッセージ送信（1900文字ずつ分割）."""
+    chunks = [text[i : i + 1900] for i in range(0, len(text), 1900)]
     for chunk in chunks:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=chunk)
+        payload = json.dumps({"content": chunk}).encode("utf-8")
+        req = urllib.request.Request(
+            DISCORD_WEBHOOK_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req)
 
 
 # --- 4. メイン処理 ---
@@ -269,11 +275,11 @@ def main():
     output_path.write_text(frontmatter + digest, encoding="utf-8")
     print(f"  保存: {output_path}")
 
-    # Step 4: Telegram送信
-    print("  Telegram要約作成中...")
-    summary = make_telegram_summary(digest)
-    print("  Telegram送信中...")
-    asyncio.run(send_telegram(summary))
+    # Step 4: Discord送信
+    print("  Discord要約作成中...")
+    summary = make_discord_summary(digest)
+    print("  Discord送信中...")
+    send_discord(summary)
     print("  送信完了!")
 
     print(f"[{TODAY}] 完了!")

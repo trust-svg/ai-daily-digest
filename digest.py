@@ -1,4 +1,4 @@
-"""AI Daily Digest — 毎朝AIニュースを収集・要約・Discord送信."""
+"""AI Daily Digest — 毎朝AIニュース＋経営日報をDiscord送信."""
 
 import os
 import re
@@ -21,6 +21,9 @@ TODAY = datetime.now(JST).strftime("%Y-%m-%d")
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+
+# --- 経営日報用（オプション） ---
+EBAY_AGENT_URL = os.environ.get("EBAY_AGENT_URL", "")  # https://ebay.trustlink-tk.com
 
 OUTPUT_DIR = Path(__file__).parent / "digests"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -137,6 +140,45 @@ def search_news() -> str:
     return "\n\n".join(all_results)
 
 
+# --- 1.5 経営データ収集 ---
+
+def _api_get(url: str, timeout: int = 10) -> dict | None:
+    """GETリクエストしてJSONを返す。失敗時はNone。"""
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"    API取得失敗 ({url}): {e}")
+        return None
+
+
+def fetch_business_data() -> str:
+    """ebay-agent APIから経営データを取得してテキストにまとめる。"""
+    if not EBAY_AGENT_URL:
+        return ""
+
+    sections = []
+    base = EBAY_AGENT_URL.rstrip("/")
+
+    # eBay売上サマリー（7日間）
+    sales = _api_get(f"{base}/api/sales/summary?days=7")
+    if sales:
+        sections.append(f"【eBay売上（直近7日）】\n{json.dumps(sales, ensure_ascii=False, indent=2)}")
+
+    # アクティブ出品数
+    listings = _api_get(f"{base}/api/listings")
+    if listings and isinstance(listings, list):
+        active = len(listings)
+        out_of_stock = sum(1 for l in listings if l.get("quantity", 0) == 0)
+        sections.append(f"【eBay出品状況】アクティブ: {active}件, 在庫切れ: {out_of_stock}件")
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
+
+
 # --- 2. Claude APIでダイジェスト生成 ---
 
 SYSTEM_PROMPT_PUBLIC = """\
@@ -200,9 +242,18 @@ def generate_digest(raw_news: str) -> str:
 
 # --- 3. Discord送信 ---
 
-def make_discord_summary(digest: str) -> str:
-    """ニュース要約 + 自分のビジネスへの活用ポイントをDiscord用に生成."""
+def make_discord_summary(digest: str, biz_data: str = "") -> str:
+    """ニュース要約 + 経営日報 + ビジネス活用ポイントをDiscord用に生成."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    biz_section = ""
+    if biz_data:
+        biz_section = (
+            "\n\n## 経営データ（本日分）\n"
+            "以下の経営データも含めて、冒頭に📊経営サマリーセクションを追加してください。\n"
+            "売上・出品数などを見やすくまとめ、前週比や注目ポイントがあれば指摘してください。\n\n"
+            f"{biz_data}\n"
+        )
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -213,8 +264,9 @@ def make_discord_summary(digest: str) -> str:
                 "content": (
                     "以下のAIダイジェストを元に、Discordメッセージを作成してください。\n\n"
                     "## 構成\n"
-                    "1. ニュース要約（各セクション要点1-2行）\n"
-                    "2. 🎯 ビジネス活用ポイント（以下の事業ごとに具体的アクション提案）:\n"
+                    + ("1. 📊 経営サマリー（売上・出品状況の要点）\n" if biz_data else "")
+                    + f"{'2' if biz_data else '1'}. ニュース要約（各セクション要点1-2行）\n"
+                    f"{'3' if biz_data else '2'}. 🎯 ビジネス活用ポイント（以下の事業ごとに具体的アクション提案）:\n"
                     "   - eBay輸出（日本→海外の越境EC）\n"
                     "   - ZINQ（マッチングアプリAIコーチ、LINE Bot、月額¥4,980）\n"
                     "   - Sion（AI占いサロン、霊視鑑定ビジネス）\n"
@@ -226,6 +278,7 @@ def make_discord_summary(digest: str) -> str:
                     "- 最後に「📄 NotebookLM用の詳細版はGitHubリポジトリのdigestsフォルダへ」と追記\n"
                     "- Discord Markdownで書式を整えること\n\n"
                     f"{digest}"
+                    f"{biz_section}"
                 ),
             }
         ],
@@ -261,12 +314,20 @@ def main():
     if len(raw_news) < 200:
         print("  WARNING: 検索結果が少なすぎます。処理を続行しますが品質に影響する可能性があります。")
 
-    # Step 2: ダイジェスト生成
+    # Step 2: 経営データ収集
+    print("  経営データ収集中...")
+    biz_data = fetch_business_data()
+    if biz_data:
+        print(f"  経営データ取得完了: {len(biz_data)} chars")
+    else:
+        print("  経営データなし（EBAY_AGENT_URL未設定 or API接続不可）")
+
+    # Step 3: ダイジェスト生成
     print("  ダイジェスト生成中...")
     digest = generate_digest(raw_news)
     print(f"  生成完了: {len(digest)} chars")
 
-    # Step 3: ファイル保存
+    # Step 4: ファイル保存
     output_path = OUTPUT_DIR / f"ai-daily-{TODAY}.md"
     frontmatter = (
         f'---\ndate: "{TODAY}"\ntype: ai-daily-digest\n'
@@ -275,9 +336,9 @@ def main():
     output_path.write_text(frontmatter + digest, encoding="utf-8")
     print(f"  保存: {output_path}")
 
-    # Step 4: Discord送信
+    # Step 5: Discord送信（経営日報付き）
     print("  Discord要約作成中...")
-    summary = make_discord_summary(digest)
+    summary = make_discord_summary(digest, biz_data)
     print("  Discord送信中...")
     send_discord(summary)
     print("  送信完了!")

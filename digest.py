@@ -295,7 +295,10 @@ def send_discord(text: str) -> None:
         req = urllib.request.Request(
             DISCORD_WEBHOOK_URL,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "TrustLink-DailyDigest/1.0",
+            },
             method="POST",
         )
         urllib.request.urlopen(req)

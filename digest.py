@@ -20,7 +20,13 @@ JST = timezone(timedelta(hours=9))
 TODAY = datetime.now(JST).strftime("%Y-%m-%d")
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+
+# --- 通知チャネル（どちらか一方でも可。全滅時は exit 1 で失敗を明示する） ---
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+CLAUDE_MODEL = "claude-sonnet-5"
 
 # --- 経営日報用（オプション） ---
 EBAY_AGENT_URL = os.environ.get("EBAY_AGENT_URL", "")  # https://ebay.trustlink-tk.com
@@ -71,12 +77,14 @@ def fetch_google_news_rss(query: str, num: int = 8) -> list[dict]:
         link = item.findtext("link", "")
         desc = _strip_html(item.findtext("description", ""))
         pub_date = item.findtext("pubDate", "")
-        items.append({
-            "title": title,
-            "link": link,
-            "description": desc[:300],
-            "date": pub_date,
-        })
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "description": desc[:300],
+                "date": pub_date,
+            }
+        )
     return items
 
 
@@ -100,12 +108,14 @@ def fetch_google_news_rss_ja(query: str, num: int = 8) -> list[dict]:
         link = item.findtext("link", "")
         desc = _strip_html(item.findtext("description", ""))
         pub_date = item.findtext("pubDate", "")
-        items.append({
-            "title": title,
-            "link": link,
-            "description": desc[:300],
-            "date": pub_date,
-        })
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "description": desc[:300],
+                "date": pub_date,
+            }
+        )
     return items
 
 
@@ -142,6 +152,7 @@ def search_news() -> str:
 
 # --- 1.5 経営データ収集 ---
 
+
 def _api_get(url: str, timeout: int = 10) -> dict | None:
     """GETリクエストしてJSONを返す。失敗時はNone。"""
     req = urllib.request.Request(url, headers=HEADERS)
@@ -164,14 +175,18 @@ def fetch_business_data() -> str:
     # eBay売上サマリー（7日間）
     sales = _api_get(f"{base}/api/sales/summary?days=7")
     if sales:
-        sections.append(f"【eBay売上（直近7日）】\n{json.dumps(sales, ensure_ascii=False, indent=2)}")
+        sections.append(
+            f"【eBay売上（直近7日）】\n{json.dumps(sales, ensure_ascii=False, indent=2)}"
+        )
 
     # アクティブ出品数
     listings = _api_get(f"{base}/api/listings")
     if listings and isinstance(listings, list):
         active = len(listings)
         out_of_stock = sum(1 for l in listings if l.get("quantity", 0) == 0)
-        sections.append(f"【eBay出品状況】アクティブ: {active}件, 在庫切れ: {out_of_stock}件")
+        sections.append(
+            f"【eBay出品状況】アクティブ: {active}件, 在庫切れ: {out_of_stock}件"
+        )
 
     if not sections:
         return ""
@@ -226,7 +241,7 @@ def generate_digest(raw_news: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=CLAUDE_MODEL,
         max_tokens=4096,
         system=SYSTEM_PROMPT_PUBLIC.replace("{date}", TODAY),
         messages=[
@@ -242,6 +257,7 @@ def generate_digest(raw_news: str) -> str:
 
 # --- 3. Discord送信 ---
 
+
 def make_discord_summary(digest: str, biz_data: str = "") -> str:
     """ニュース要約 + 経営日報 + ビジネス活用ポイントをDiscord用に生成."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -256,7 +272,7 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
         )
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=CLAUDE_MODEL,
         max_tokens=3000,
         messages=[
             {
@@ -264,7 +280,11 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
                 "content": (
                     "以下のAIダイジェストを元に、Discordメッセージを作成してください。\n\n"
                     "## 構成\n"
-                    + ("1. 📊 経営サマリー（売上・出品状況の要点）\n" if biz_data else "")
+                    + (
+                        "1. 📊 経営サマリー（売上・出品状況の要点）\n"
+                        if biz_data
+                        else ""
+                    )
                     + f"{'2' if biz_data else '1'}. ニュース要約（各セクション要点1-2行）\n"
                     f"{'3' if biz_data else '2'}. 🎯 ビジネス活用ポイント（以下の事業ごとに具体的アクション提案）:\n"
                     "   - eBay輸出（日本→海外の越境EC）\n"
@@ -304,7 +324,61 @@ def send_discord(text: str) -> None:
         urllib.request.urlopen(req)
 
 
+def send_telegram(text: str) -> None:
+    """Telegram Botにメッセージ送信（4000文字ずつ分割・plain text）."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+    for chunk in chunks:
+        payload = urllib.parse.urlencode(
+            {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": chunk,
+                "disable_web_page_preview": "true",
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, method="POST")
+        try:
+            urllib.request.urlopen(req)
+        except Exception as e:
+            # URLにbot tokenを含むため、例外文字列からマスクして再送出
+            raise RuntimeError(str(e).replace(TELEGRAM_BOT_TOKEN, "***")) from None
+
+
+def send_notifications(text: str) -> None:
+    """設定済みの全チャネルに送信。1つでも成功すればOK、全滅なら exit 1。
+
+    2026-06: Discord webhook 404 → 3連続失敗 → GitHubが60日不活性で
+    workflowを自動無効化 → 6週間サイレント停止、の再発防止。
+    片系失敗は警告ログに留め、全チャネル失敗のみ run を fail させる。
+    """
+    channels = []
+    if DISCORD_WEBHOOK_URL:
+        channels.append(("Discord", send_discord))
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        channels.append(("Telegram", send_telegram))
+
+    if not channels:
+        raise SystemExit(
+            "通知チャネル未設定: DISCORD_WEBHOOK_URL または "
+            "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID を設定してください"
+        )
+
+    succeeded, errors = [], []
+    for name, fn in channels:
+        try:
+            fn(text)
+            succeeded.append(name)
+            print(f"    {name} 送信成功")
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            print(f"    WARNING: {name} 送信失敗: {e}")
+
+    if not succeeded:
+        raise SystemExit(f"全通知チャネル送信失敗: {'; '.join(errors)}")
+
+
 # --- 4. メイン処理 ---
+
 
 def main():
     print(f"[{TODAY}] AI Daily Digest 生成開始...")
@@ -315,7 +389,9 @@ def main():
     print(f"  検索完了: {len(raw_news)} chars")
 
     if len(raw_news) < 200:
-        print("  WARNING: 検索結果が少なすぎます。処理を続行しますが品質に影響する可能性があります。")
+        print(
+            "  WARNING: 検索結果が少なすぎます。処理を続行しますが品質に影響する可能性があります。"
+        )
 
     # Step 2: 経営データ収集
     print("  経営データ収集中...")
@@ -334,16 +410,16 @@ def main():
     output_path = OUTPUT_DIR / f"ai-daily-{TODAY}.md"
     frontmatter = (
         f'---\ndate: "{TODAY}"\ntype: ai-daily-digest\n'
-        f'purpose: NotebookLM動画用ソース\n---\n\n'
+        f"purpose: NotebookLM動画用ソース\n---\n\n"
     )
     output_path.write_text(frontmatter + digest, encoding="utf-8")
     print(f"  保存: {output_path}")
 
-    # Step 5: Discord送信（経営日報付き）
-    print("  Discord要約作成中...")
+    # Step 5: 通知送信（経営日報付き・Discord/Telegram）
+    print("  要約作成中...")
     summary = make_discord_summary(digest, biz_data)
-    print("  Discord送信中...")
-    send_discord(summary)
+    print("  通知送信中...")
+    send_notifications(summary)
     print("  送信完了!")
 
     print(f"[{TODAY}] 完了!")

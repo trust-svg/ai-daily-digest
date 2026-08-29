@@ -236,13 +236,47 @@ Sources:
 """
 
 
+def _text_from(message, what: str) -> str:
+    """レスポンスから本文テキストだけを取り出す.
+
+    ⚠️ content[0] が本文とは限らない（2026-08-21〜28 の8日連続失敗の原因）:
+       claude-sonnet-5 は extended thinking が既定ONで、content[0] に
+       ThinkingBlock が入る。`content[0].text` は AttributeError で落ちる。
+       ブロックの順序・種類に依存せず type == "text" だけを拾って連結する。
+
+    テキストが1つも無い / max_tokens で途中打ち切りの場合は例外にする。
+    短い本文をそのまま通すと「送信は成功したが中身が切れている」という
+    サイレント故障になり、Discord/Telegram には届いてしまうため。
+    """
+    parts = [
+        block.text
+        for block in message.content
+        if getattr(block, "type", None) == "text"
+    ]
+    text = "".join(parts).strip()
+
+    if message.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"{what}: max_tokens で打ち切られました（本文 {len(text)} chars）。"
+            "thinking と出力は max_tokens を共有するので上限を上げてください。"
+        )
+    if not text:
+        kinds = [getattr(b, "type", "?") for b in message.content]
+        raise RuntimeError(
+            f"{what}: テキストブロックがありません（blocks={kinds} "
+            f"stop_reason={message.stop_reason}）"
+        )
+    return text
+
+
 def generate_digest(raw_news: str) -> str:
     """Claude APIで公開用ダイジェストを生成（活用ポイントなし）."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=4096,
+        # thinking が既定ONで max_tokens を出力と共有するため余裕を持たせる。
+        max_tokens=8192,
         system=SYSTEM_PROMPT_PUBLIC.replace("{date}", TODAY),
         messages=[
             {
@@ -252,7 +286,7 @@ def generate_digest(raw_news: str) -> str:
         ],
     )
 
-    return message.content[0].text
+    return _text_from(message, "generate_digest")
 
 
 # --- 3. Discord送信 ---
@@ -273,7 +307,8 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
 
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=3000,
+        # 同上（thinking と共有）。本文は下のプロンプトで3500文字以内に絞っている。
+        max_tokens=6000,
         messages=[
             {
                 "role": "user",
@@ -304,7 +339,7 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
         ],
     )
 
-    return message.content[0].text
+    return _text_from(message, "make_discord_summary")
 
 
 def send_discord(text: str) -> None:

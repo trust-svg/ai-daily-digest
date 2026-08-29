@@ -442,6 +442,10 @@ def main():
     print(f"  生成完了: {len(digest)} chars")
 
     # Step 4: ファイル保存
+    # ⚠️ このリポジトリは public。ここで保存した内容は Commit digest ステップで
+    #    そのまま公開コミットされる。保存するのは generate_digest(raw_news) の
+    #    出力＝ニュースのみで、biz_data は Step 5 の通知（Discord/Telegram）に
+    #    しか渡していない。経営数値をファイル側へ混ぜないこと。
     output_path = OUTPUT_DIR / f"ai-daily-{TODAY}.md"
     frontmatter = (
         f'---\ndate: "{TODAY}"\ntype: ai-daily-digest\n'

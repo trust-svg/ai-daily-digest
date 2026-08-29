@@ -40,3 +40,27 @@ jobs:
           git add digests/
           git diff --cached --quiet || git commit -m "digest: $(date -u +%Y-%m-%d)"
           git push
+
+      # 失敗しても黙って終わらないようにする。2026-07-17〜08-28 の約6週間、
+      # ThinkingBlock で毎朝 exit 1 していたのに失敗通知の経路が無く、
+      # 週次の pipeline-health だけが唯一の検知手段だった（その週次も
+      # checks.json の note に残った「FAIL表示=想定内」で6週連続黙殺された）。
+      # 成功通知が Telegram なので失敗通知も同じ Telegram に出す。
+      # 全ステップ（Commit/push 失敗を含む）を拾うため必ず最後に置くこと。
+      - name: Notify failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "::error::Telegram secrets が未設定で失敗通知を送れない（＝サイレント故障に戻る）"
+            exit 1
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf -v TEXT '🔴 [GHA] ai-daily-digest 失敗\n本日の日報は届いていません。\n%s' "${RUN_URL}"
+          curl -sS --fail-with-body -o /dev/null -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${TEXT}"

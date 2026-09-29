@@ -26,7 +26,7 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-CLAUDE_MODEL = "claude-sonnet-5"
+CLAUDE_MODEL = "claude-sonnet-5-5"
 
 # --- 経営日報用（オプション） ---
 EBAY_AGENT_URL = os.environ.get("EBAY_AGENT_URL", "")  # https://ebay.trustlink-tk.com
@@ -240,7 +240,7 @@ def _text_from(message, what: str) -> str:
     """レスポンスから本文テキストだけを取り出す.
 
     ⚠️ content[0] が本文とは限らない（2026-08-21〜28 の8日連続失敗の原因）:
-       claude-sonnet-5 は extended thinking が既定ONで、content[0] に
+       claude-sonnet-5 以降（5.5 含む）は extended thinking が既定ONで、content[0] に
        ThinkingBlock が入る。`content[0].text` は AttributeError で落ちる。
        ブロックの順序・種類に依存せず type == "text" だけを拾って連結する。
 

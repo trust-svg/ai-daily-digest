@@ -273,10 +273,12 @@ def generate_digest(raw_news: str) -> str:
     """Claude APIで公開用ダイジェストを生成（活用ポイントなし）."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    message = client.messages.create(
+    # thinking は既定ONで max_tokens を出力と共有する。8192 では本文 8.6k 字の時点で
+    # 打ち切られた（2026-09-29〜）。非ストリーミングは SDK が約 21k 超を拒否するので
+    # ストリーミングで受けて上限を広く取る。
+    with client.messages.stream(
         model=CLAUDE_MODEL,
-        # thinking が既定ONで max_tokens を出力と共有するため余裕を持たせる。
-        max_tokens=8192,
+        max_tokens=32000,
         system=SYSTEM_PROMPT_PUBLIC.replace("{date}", TODAY),
         messages=[
             {
@@ -284,7 +286,8 @@ def generate_digest(raw_news: str) -> str:
                 "content": f"以下の検索結果を元にダイジェストを作成してください:\n\n{raw_news}",
             }
         ],
-    )
+    ) as stream:
+        message = stream.get_final_message()
 
     return _text_from(message, "generate_digest")
 
@@ -305,10 +308,10 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
             f"{biz_data}\n"
         )
 
-    message = client.messages.create(
+    with client.messages.stream(
         model=CLAUDE_MODEL,
         # 同上（thinking と共有）。本文は下のプロンプトで3500文字以内に絞っている。
-        max_tokens=6000,
+        max_tokens=16000,
         messages=[
             {
                 "role": "user",
@@ -337,7 +340,8 @@ def make_discord_summary(digest: str, biz_data: str = "") -> str:
                 ),
             }
         ],
-    )
+    ) as stream:
+        message = stream.get_final_message()
 
     return _text_from(message, "make_discord_summary")
 
